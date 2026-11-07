@@ -10,6 +10,7 @@ Kino lavhasini (video yoki rasm) yuborasiz — bot ustidagi **subtitr, yozuv va 
 | Watermark / logo | Videodan 40 ta kadr olinadi; sahna o'zgarsa ham joyida qoladigan chegaralar (odatda burchaklarda) — logo deb topiladi |
 | To'ldirish | OpenCV inpainting (TELEA) — atrofdagi piksellar bilan |
 | Audio | ffmpeg orqali asl ovoz saqlanadi |
+| O'z belgingiz | Olib tashlangan watermark turgan burchakka `BRAND_TEXT` (standart: `kino_sahnalari_uzsubtitr`) yarim shaffof yozuv sifatida qo'yiladi. Watermark topilmasa — yuqori o'ng burchak. |
 
 Model fayllari `rapidocr-onnxruntime` paketi ichida keladi, GPU kerak emas.
 

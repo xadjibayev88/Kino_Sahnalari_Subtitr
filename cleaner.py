@@ -14,6 +14,7 @@ Ishlash prinsipi:
 from __future__ import annotations
 
 import json
+import os
 import logging
 import subprocess
 import threading
@@ -52,6 +53,10 @@ class CleanOptions:
     wm_edge_ratio: float = 0.65   # piksel shuncha kadrda edge bo'lsa -> static
     wm_border: float = 0.30       # watermark faqat chekka qismlarda qidiriladi (0 = butun kadr)
     crf: int = 20
+    # O'z belgingiz (masalan Instagram kanal nomi). Bo'sh bo'lsa qo'yilmaydi.
+    brand_text: str = ""
+    brand_opacity: float = 0.75
+    brand_size: float = 0.045     # matn balandligi = kadr qisqa tomonining shu qismi
 
 
 # --------------------------------------------------------------------------- #
@@ -152,6 +157,78 @@ def detect_static_watermark(frames: list[np.ndarray], opts: CleanOptions) -> np.
 
 
 # --------------------------------------------------------------------------- #
+# O'z belgingizni (brand) qo'yish
+# --------------------------------------------------------------------------- #
+
+_FONT_PATHS = [
+    os.getenv("BRAND_FONT", ""),
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    "/Library/Fonts/Arial Bold.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
+]
+
+
+def _load_font(px: int):
+    from PIL import ImageFont
+
+    for path in _FONT_PATHS:
+        if path and os.path.exists(path):
+            return ImageFont.truetype(path, px)
+    return ImageFont.load_default(size=px)
+
+
+def pick_corner(mask: np.ndarray | None, default: str = "tr") -> str:
+    """Olib tashlangan watermark qaysi burchakda bo'lganini aniqlaydi: tl/tr/bl/br."""
+    if mask is None or not mask.any():
+        return default
+    h, w = mask.shape[:2]
+    ys, xs = np.nonzero(mask)
+    cy, cx = ys.mean(), xs.mean()
+    return ("t" if cy < h / 2 else "b") + ("l" if cx < w / 2 else "r")
+
+
+class Brand:
+    """Matnni bir marta RGBA rasmga chizib, har kadrga tez alpha-blend qiladi."""
+
+    def __init__(self, text: str, frame_w: int, frame_h: int, corner: str, opts: CleanOptions):
+        from PIL import Image, ImageDraw
+
+        px = max(14, int(min(frame_w, frame_h) * opts.brand_size))
+        font = _load_font(px)
+        tmp = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+        l, t, r, b = tmp.textbbox((0, 0), text, font=font, stroke_width=max(1, px // 12))
+        tw, th = r - l, b - t
+        # Juda uzun bo'lsa, kadr kengligining 60% iga sig'diramiz
+        if tw > frame_w * 0.6:
+            px = max(12, int(px * frame_w * 0.6 / tw))
+            font = _load_font(px)
+            l, t, r, b = tmp.textbbox((0, 0), text, font=font, stroke_width=max(1, px // 12))
+            tw, th = r - l, b - t
+        pad = max(2, px // 6)
+        img = Image.new("RGBA", (tw + 2 * pad, th + 2 * pad), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        d.text((pad - l, pad - t), text, font=font, fill=(255, 255, 255, 255),
+               stroke_width=max(1, px // 12), stroke_fill=(0, 0, 0, 255))
+        rgba = np.asarray(img).astype(np.float32)
+        self.rgb = rgba[..., 2::-1]                       # RGB -> BGR
+        self.alpha = (rgba[..., 3:4] / 255.0) * opts.brand_opacity
+        bh, bw = self.alpha.shape[:2]
+        mx, my = int(frame_w * 0.03), int(frame_h * 0.03)
+        self.x = mx if corner[1] == "l" else frame_w - bw - mx
+        self.y = my if corner[0] == "t" else frame_h - bh - my
+        self.x, self.y = max(0, self.x), max(0, self.y)
+        self.bw, self.bh = min(bw, frame_w - self.x), min(bh, frame_h - self.y)
+
+    def apply(self, frame: np.ndarray) -> np.ndarray:
+        y, x, h, w = self.y, self.x, self.bh, self.bw
+        roi = frame[y:y + h, x:x + w].astype(np.float32)
+        a = self.alpha[:h, :w]
+        frame[y:y + h, x:x + w] = (roi * (1 - a) + self.rgb[:h, :w] * a).astype(np.uint8)
+        return frame
+
+
+# --------------------------------------------------------------------------- #
 # Rasm
 # --------------------------------------------------------------------------- #
 
@@ -173,6 +250,12 @@ def clean_image(src: str, dst: str, opts: CleanOptions) -> bool:
     found = bool(mask.any())
     if found:
         img = cv2.inpaint(img, mask, opts.inpaint_radius, cv2.INPAINT_TELEA)
+    if opts.brand_text:
+        h, w = img.shape[:2]
+        # Rasmda watermark joyi: chekkadagi topilgan joylar (pastki subtitr hisobga olinmaydi)
+        edge = mask.copy()
+        edge[int(h * 0.7):, int(w * 0.2):int(w * 0.8)] = 0
+        img = Brand(opts.brand_text, w, h, pick_corner(edge), opts).apply(img)
     cv2.imwrite(dst, img, [cv2.IMWRITE_JPEG_QUALITY, 95])
     return found
 
@@ -249,6 +332,7 @@ def clean_video(src: str, dst: str, opts: CleanOptions, progress: ProgressCb = N
         cap = cv2.VideoCapture(src)
 
     found = bool(wm_mask.any() or text_masks)
+    brand = Brand(opts.brand_text, w, h, pick_corner(wm_mask), opts) if opts.brand_text else None
 
     # --- 2-o'tish: inpaint va ffmpeg ga yozish
     has_audio = _has_audio(info)
@@ -282,6 +366,8 @@ def clean_video(src: str, dst: str, opts: CleanOptions, progress: ProgressCb = N
                         mask |= m
             if mask.any():
                 frame = cv2.inpaint(frame, mask, opts.inpaint_radius, cv2.INPAINT_TELEA)
+            if brand is not None:
+                frame = brand.apply(frame)
             proc.stdin.write(frame.tobytes())
             idx += 1
             if progress and total and idx % 15 == 0:

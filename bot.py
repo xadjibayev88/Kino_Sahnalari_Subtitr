@@ -45,6 +45,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 # Lokal Bot API server (katta fayllar uchun, 2 GB gacha). Bo'sh bo'lsa -- api.telegram.org
 LOCAL_API_URL = os.getenv("TELEGRAM_API_URL", "").rstrip("/")
 MAX_JOBS = int(os.getenv("MAX_JOBS", "1"))
+# Tozalangan videoga qo'yiladigan o'z belgingiz. Bo'sh qilsangiz qo'yilmaydi.
+BRAND_TEXT = os.getenv("BRAND_TEXT", "kino_sahnalari_uzsubtitr").strip()
 MAX_DURATION = int(os.getenv("MAX_DURATION", "180"))  # soniya
 # Oddiy Bot API: yuklab olish 20 MB, yuborish 50 MB
 MAX_DOWNLOAD_MB = int(os.getenv("MAX_DOWNLOAD_MB", "2000" if LOCAL_API_URL else "20"))
@@ -157,7 +159,7 @@ async def on_media(msg: Message, bot: Bot) -> None:
         return
 
     mode = get_mode(msg.from_user.id)
-    opts = CleanOptions(mode=mode)
+    opts = CleanOptions(mode=mode, brand_text=BRAND_TEXT)
     status = await msg.answer(
         f"⏳ Navbatda... (rejim: {MODES[mode]})" if job_sem.locked() else "⏳ Yuklab olinmoqda..."
     )
