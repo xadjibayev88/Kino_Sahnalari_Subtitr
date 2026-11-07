@@ -52,3 +52,7 @@ python bot.py
 - `cleaner.py` — tasvir/videoni tozalash logikasi
 
 ⚠️ Botdan faqat sizga tegishli yoki foydalanishga ruxsat berilgan kontent bilan foydalaning — boshqalarning watermarkini olib tashlab qayta tarqatish mualliflik huquqini buzishi mumkin.
+
+## Railway'da joylash
+Bot Railway'da Dockerfile orqali ishlaydi. `ccr-28fb0b1f-8r8ou6` branchiga push qilinganda avtomatik qayta deploy bo'ladi.
+Sozlamalar (`BOT_TOKEN`, `BRAND_TEXT`, `MAX_DURATION`, `MAX_JOBS`) — servisning **Variables** bo'limida.
