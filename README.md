@@ -2,6 +2,10 @@
 
 Kino lavhasini (video yoki rasm) yuborasiz — bot ustidagi **subtitr, yozuv va watermark (logo)** larni olib tashlab, tozalangan faylni qaytaradi.
 
+## Instagram havolasi
+Botga Instagram reel/post havolasini yuborsangiz, bot videoni o'zi yuklab oladi (yt-dlp), tozalaydi va belgingizni qo'yadi.
+Instagram serverlardan login qilmasdan yuklashni bloklashi mumkin. Shunda Railway'da `INSTAGRAM_COOKIES` o'zgaruvchisiga Instagram akkauntingizning `cookies.txt` (Netscape format) mazmunini qo'ying.
+
 ## Qanday ishlaydi
 
 | Bosqich | Usul |

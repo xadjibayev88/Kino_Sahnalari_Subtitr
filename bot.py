@@ -9,12 +9,14 @@ Ishga tushirish:
 from __future__ import annotations
 
 import asyncio
+import re
 import logging
 import os
 import shutil
 import tempfile
 import time
 from pathlib import Path
+from typing import Awaitable, Callable
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -29,6 +31,7 @@ from aiogram.types import (
 )
 
 import cleaner
+import insta
 from cleaner import MODES, CleanOptions
 
 try:
@@ -50,6 +53,8 @@ BRAND_TEXT = os.getenv("BRAND_TEXT", "kino_sahnalari_uzsubtitr").strip()
 MAX_DURATION = int(os.getenv("MAX_DURATION", "180"))  # soniya
 # Oddiy Bot API: yuklab olish 20 MB, yuborish 50 MB
 MAX_DOWNLOAD_MB = int(os.getenv("MAX_DOWNLOAD_MB", "2000" if LOCAL_API_URL else "20"))
+# Havoladan yuklashda Telegram 20 MB cheklovi yo'q
+MAX_DOWNLOAD_MB_LINK = int(os.getenv("MAX_DOWNLOAD_MB_LINK", "200"))
 
 user_modes: dict[int, str] = {}
 job_sem = asyncio.Semaphore(MAX_JOBS)
@@ -71,7 +76,7 @@ def get_mode(user_id: int) -> str:
 @dp.message(CommandStart())
 async def cmd_start(msg: Message) -> None:
     await msg.answer(
-        "👋 Salom! Menga kino lavhasini (video yoki rasm) yuboring — "
+        "👋 Salom! Menga kino lavhasini (video yoki rasm) yoki <b>Instagram havolasini</b> yuboring — "
         "ustidagi <b>yozuv, subtitr va watermark</b>larni olib tashlab qaytaraman.\n\n"
         f"📏 Video: {MAX_DURATION} soniyagacha, {MAX_DOWNLOAD_MB} MB gacha.\n"
         "⚙️ Rejimni tanlash: /mode\n"
@@ -158,6 +163,19 @@ async def on_media(msg: Message, bot: Bot) -> None:
         await msg.answer(f"❌ Video juda uzun ({duration} s). Maksimum: {MAX_DURATION} soniya.")
         return
 
+    async def fetch(tmp: Path) -> tuple[Path, str]:
+        src = tmp / ("input.mp4" if kind == "video" else "input.jpg")
+        await _download(bot, file_id, src)
+        return src, kind
+
+    await _process(msg, fetch)
+
+
+Fetcher = Callable[[Path], Awaitable[tuple[Path, str]]]
+
+
+async def _process(msg: Message, fetch: Fetcher) -> None:
+    """Faylni olish (fetch), tozalash, o'z belgisini qo'yish va qaytarib yuborish."""
     mode = get_mode(msg.from_user.id)
     opts = CleanOptions(mode=mode, brand_text=BRAND_TEXT)
     status = await msg.answer(
@@ -167,9 +185,9 @@ async def on_media(msg: Message, bot: Bot) -> None:
     async with job_sem:
         tmp = Path(tempfile.mkdtemp(prefix="kino_"))
         try:
-            src = tmp / ("input.mp4" if kind == "video" else "input.jpg")
+            await _safe_edit(status, "⏳ Yuklab olinmoqda...")
+            src, kind = await fetch(tmp)
             dst = tmp / ("output.mp4" if kind == "video" else "output.jpg")
-            await _download(bot, file_id, src)
             await status.edit_text("🧹 Tozalanmoqda... 0%")
 
             loop = asyncio.get_running_loop()
@@ -189,7 +207,7 @@ async def on_media(msg: Message, bot: Bot) -> None:
             else:
                 found = await asyncio.to_thread(cleaner.clean_image, str(src), str(dst), opts)
 
-            caption = "✅ Tayyor!" if found else "ℹ️ Yozuv yoki watermark topilmadi, fayl deyarli o'zgarmadi."
+            caption = "✅ Tayyor!" if found else "ℹ️ Yozuv yoki watermark topilmadi, faqat belgingiz qo'yildi."
             await _safe_edit(status, "📤 Yuborilmoqda...")
             out = FSInputFile(dst)
             if kind == "video":
@@ -204,11 +222,23 @@ async def on_media(msg: Message, bot: Bot) -> None:
                 await msg.answer_photo(out, caption=caption)
                 await msg.answer_document(FSInputFile(dst, filename="tozalangan.jpg"))
             await status.delete()
+        except insta.InstaError as e:
+            await _safe_edit(status, f"❌ {e}")
         except Exception as e:  # noqa: BLE001
             log.exception("Ishlov berishda xato")
             await _safe_edit(status, f"❌ Xatolik yuz berdi: {e}")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+@dp.message(F.text.regexp(insta.URL_RE))
+async def on_instagram(msg: Message) -> None:
+    url = re.search(insta.URL_RE, msg.text).group(0)
+
+    async def fetch(tmp: Path) -> tuple[Path, str]:
+        return await asyncio.to_thread(insta.download, url, tmp, MAX_DURATION, MAX_DOWNLOAD_MB_LINK)
+
+    await _process(msg, fetch)
 
 
 async def _safe_edit(message: Message, text: str) -> None:
@@ -220,7 +250,7 @@ async def _safe_edit(message: Message, text: str) -> None:
 
 @dp.message()
 async def fallback(msg: Message) -> None:
-    await msg.answer("Menga video yoki rasm yuboring 🎬  (/help)")
+    await msg.answer("Menga video, rasm yoki Instagram havolasini yuboring 🎬  (/help)")
 
 
 async def main() -> None:
